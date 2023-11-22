@@ -1,0 +1,190 @@
+import numpy as np
+import torch
+import pandas as pd
+import xlsxwriter
+from denoising_diffusion_pytorch import Unet1D, GaussianDiffusion1D, Trainer1D, Dataset1D
+
+import pandas as pd
+import numpy as np
+import os
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+import openpyxl
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
+# Directory containing the Excel files
+excel_dir = 'Student fall data phone and watch/'
+
+# Get a list of all Excel files in the directory
+excel_files = [file for file in os.listdir(excel_dir) if file.endswith('.xlsx')]
+
+
+
+# Split the data into trials based on empty spaces
+trials = []
+current_trial = []
+
+def get_accelerometer_column_name(df, axis):
+    """
+    Function to get the correct column name for accelerometer data
+    based on the axis (x, y, z) provided.
+    """
+    possible_column_names = [f"DataCollection__w_accelerometer_{axis}", f"w_accelerometer_{axis}"]
+    for column_name in possible_column_names:
+        if column_name in df.columns:
+            return column_name
+    return None  # Return None if neither column is present
+
+for excel_file in excel_files:
+    # Construct the full path to the Excel file
+    excel_file_path = os.path.join(excel_dir, excel_file)
+
+    try:
+        # Open the Excel file and read sheet names
+        excel_workbook = openpyxl.load_workbook(excel_file_path, read_only=True)
+        sheet_names = excel_workbook.sheetnames
+
+        # Find the sheet with a name that ends with "trimmed"
+        for sheet_name in sheet_names:
+            if sheet_name.endswith("trimmed"):
+                break  # Found the desired sheet
+        else:
+            # Handle the case when no matching sheet is found
+            print(f"No sheet ending with 'trimmed' found in {excel_file}")
+            continue
+
+        # Load the data from the selected sheet
+        df = pd.read_excel(excel_file_path, sheet_name=sheet_name)
+
+        # Check and extract accelerometer data columns (x, y, z)
+        columns_to_extract = []
+        for axis in ['x', 'y', 'z']:
+            col_name = get_accelerometer_column_name(df, axis)
+            if col_name:
+                columns_to_extract.append(col_name)
+
+        if len(columns_to_extract) != 3:
+            print(f"Missing accelerometer data columns in {excel_file}")
+            continue
+
+        accelerometer_data = df[columns_to_extract].values
+
+        for row in accelerometer_data:
+            if np.all(np.isnan(row)):
+                if current_trial:
+                    trials.append(current_trial)
+                    current_trial = []
+            else:
+                current_trial.append(row)
+
+        if current_trial:
+            trials.append(current_trial)
+            current_trial = []
+
+        # Process 'trials' as needed for each file
+        # You can perform additional operations or save the trials data for each file here
+
+    except Exception as e:
+        print(f"An error occurred while processing {excel_file}: {e}")
+
+
+print(len(trials))
+
+
+# Calculate the desired trial length as a multiple of 1, 2, 4, or 8
+highest_trial_length = max(len(trial) for trial in trials)
+desired_trial_length = highest_trial_length
+
+while desired_trial_length % 8 != 0:
+    desired_trial_length += 1
+
+
+# Pad each trial with zeros to the desired length
+padded_trials = []
+
+for trial in trials:
+    while len(trial) < desired_trial_length:
+        trial.append(trial[-1])
+    padded_trials.append(trial)
+
+
+# Convert the data into a 3D tensor
+tensor_data = np.array(padded_trials)
+
+# Reshape the tensor to match your desired dimensions
+tensor_data = tensor_data.transpose(0, 2, 1)
+
+training_seq = torch.tensor(tensor_data)
+
+# Apply MinMax scaling to the input data and store the scalers
+scaler_list = []
+for i in range(training_seq.shape[0]):
+    scaler = MinMaxScaler()
+    # Reshape the data for scaling
+    reshaped_data = training_seq[i].reshape(-1, 1)
+    training_seq[i] = torch.tensor(scaler.fit_transform(reshaped_data).reshape(training_seq[i].shape), dtype=torch.float)
+    scaler_list.append(scaler)
+
+
+training_seq = training_seq.float()
+
+model = Unet1D(
+    dim=64,
+    dim_mults=(1, 2, 4, 8),
+    channels=3  # 3 columns
+)
+
+diffusion = GaussianDiffusion1D(
+    model,
+    seq_length=desired_trial_length,  # number of data in 1 trial. this should be divided by 1, 2, 4, 8
+    timesteps=1000,
+    objective='pred_v'
+)
+
+dataset = Dataset1D(
+    training_seq)  # this is just an example, but you can formulate your own Dataset and pass it into the `Trainer1D` below
+
+loss = diffusion(training_seq)
+loss.backward()
+
+# # Or using trainer
+
+trainer = Trainer1D(
+    diffusion,
+    dataset = dataset,
+    train_batch_size = 32,
+    train_lr = 8e-5,
+    train_num_steps = 7000,         # total training steps
+    gradient_accumulate_every = 2,    # gradient accumulation steps
+    ema_decay = 0.995,                # exponential moving average decay
+    amp = True,                       # turn on mixed precision
+)
+trainer.train()
+
+sampled_seq = diffusion.sample(batch_size=150)
+sampled_seq.shape  # (4, 32, 128) // 4 trials, 32 features, 128 rows in one trial
+
+tensor_data = np.array(sampled_seq.cpu())
+
+print("hello")
+print(len(tensor_data), len(scaler_list))
+
+
+# Reverse the scaling for tensor_data
+for i in range(tensor_data.shape[0]):
+    # Reshape for inverse transformation
+    reshaped_data = tensor_data[i].reshape(-1, 1)
+    # Apply inverse transformation
+    tensor_data[i] = scaler_list[i].inverse_transform(reshaped_data).reshape(tensor_data[i].shape)
+
+# Save tensor_data to Excel
+excel_file_path = "trial_data.xlsx"
+with pd.ExcelWriter(excel_file_path, engine='xlsxwriter') as writer:
+    for trial_number, trial_data in enumerate(tensor_data, start=1):
+        reshaped_data = trial_data.T  # Transpose to have features as columns
+        df = pd.DataFrame(reshaped_data, columns=[f"Feature{i}" for i in range(1, reshaped_data.shape[1] + 1)])
+        df.to_excel(writer, sheet_name=f"Trial_{trial_number}", index=False)
+

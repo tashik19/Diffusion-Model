@@ -1,0 +1,14 @@
+accelerate
+einops
+ema-pytorch
+numpy
+pillow
+pytorch-fid
+torchvision
+tqdm
+pandas
+xlsxwriter
+scikit-learn
+openpyxl
+matplotlib
+seaborn
