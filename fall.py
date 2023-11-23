@@ -150,5 +150,3 @@ with pd.ExcelWriter(excel_file_path, engine='xlsxwriter') as writer:
         reshaped_data = trial_data.T  # Transpose to have features as columns
         df = pd.DataFrame(reshaped_data, columns=[f"Feature{i}" for i in range(1, reshaped_data.shape[1] + 1)])
         df.to_excel(writer, sheet_name=f"Trial_{trial_number}", index=False)
-
-
