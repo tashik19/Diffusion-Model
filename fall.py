@@ -136,19 +136,17 @@ sampled_seq.shape  # (4, 32, 128) // 4 trials, 32 features, 128 rows in one tria
 
 tensor_data = np.array(sampled_seq.cpu())
 
-for i in range(sampled_seq.shape[0]):
-    tensor_data[i] = scaler_list[i].inverse_transform(tensor_data[i])
+# Reverse the scaling for tensor_data
+for i in range(tensor_data.shape[0]):
+    # Reshape for inverse transformation
+    reshaped_data = tensor_data[i].reshape(-1, 1)
+    # Apply inverse transformation
+    tensor_data[i] = scaler_list[i].inverse_transform(reshaped_data).reshape(tensor_data[i].shape)
 
-
-# Reverse the scaling and save to Excel
+# Save tensor_data to Excel
 excel_file_path = "trial_data.xlsx"
 with pd.ExcelWriter(excel_file_path, engine='xlsxwriter') as writer:
     for trial_number, trial_data in enumerate(tensor_data, start=1):
-        # Inverse transform using the corresponding scaler
-        scaler = scaler_list[trial_number - 1]
-        reshaped_data = tensor_data[trial_number - 1].reshape(-1, 1)
-        tensor_data[trial_number - 1] = scaler.inverse_transform(reshaped_data).reshape(tensor_data[trial_number - 1].shape)
-
-        reshaped_data = tensor_data[trial_number - 1].T  # Transpose to have features as columns
+        reshaped_data = trial_data.T  # Transpose to have features as columns
         df = pd.DataFrame(reshaped_data, columns=[f"Feature{i}" for i in range(1, reshaped_data.shape[1] + 1)])
         df.to_excel(writer, sheet_name=f"Trial_{trial_number}", index=False)

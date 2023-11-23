@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Command to run on container start
-CMD ["python", "./fall.py"]
+CMD ["python", "./test.py"]
